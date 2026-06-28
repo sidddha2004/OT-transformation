@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Queue-Based Collaborative Editor</title>
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f5f5f5; height: 100vh; display: flex; flex-direction: column; }
+        .header { background: #2c3e50; color: white; padding: 15px 20px; display: flex; justify-content: space-between; align-items: center; }
+        .main-content { flex: 1; display: flex; }
+        .sidebar { width: 300px; background: white; border-right: 1px solid #ddd; padding: 20px; overflow-y: auto; }
+        .editor-container { flex: 1; display: flex; flex-direction: column; }
+        .editor-wrapper { flex: 1; position: relative; background: white; margin: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        .editor { width: 100%; height: 100%; padding: 20px; border: none; border-radius: 8px; font-size: 16px; line-height: 1.6; resize: none; outline: none; }
+        .connection-modal { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 1000; }
+        .modal-content { background: white; padding: 30px; border-radius: 8px; width: 450px; }
+        .form-group { margin-bottom: 15px; }
+        .form-group label { display: block; margin-bottom: 5px; font-size: 13px; color: #7f8c8d; }
+        .form-group input { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; }
+        .connect-btn { width: 100%; padding: 12px; background: #3498db; color: white; border: none; border-radius: 4px; font-size: 14px; cursor: pointer; margin-top: 10px; }
+        .status-bar { background: #ecf0f1; padding: 8px 15px; font-size: 12px; color: #7f8c8d; border-top: 1px solid #ddd; }
+        .queue-item { background: #f8f9fa; border-left: 3px solid #3498db; padding: 8px; margin: 5px 0; font-size: 11px; border-radius: 3px; }
+        .queue-item.completed { border-left-color: #2ecc71; }
+        .queue-item.processing { border-left-color: #f39c12; }
+        .info-box { background: #e8f4f8; border: 1px solid #b3d7e8; padding: 10px; border-radius: 4px; margin: 10px 0; font-size: 12px; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>📝 Queue-Based Collaborative Editor</h1>
+        <div class="user-info">
+            <div class="user-badge" id="userBadge">Not Connected</div>
+            <div class="user-badge" id="versionBadge">v0</div>
+        </div>
+    </div>
+
+    <div class="main-content">
+        <div class="sidebar">
+            <h3>📊 Queue System Status</h3>
+            <div class="info-box">
+                <strong>✅ Proper OT System:</strong><br>
+                Operations include client version → Server finds concurrent ops → Transforms positions → Applies → Persists → Broadcasts.
+            </div>
+
+            <h4>🔄 Recent Operations</h4>
+            <div id="operationQueue" style="font-size: 11px;">
+                <div style="color: #7f8c8d; font-style: italic;">No operations yet...</div>
+            </div>
+
+            <h4>📈 Statistics</h4>
+            <div style="font-size: 12px; color: #7f8c8d; line-height: 1.8;">
+                <div>Operations Sent: <span id="opsSent">0</span></div>
+                <div>Operations Received: <span id="opsReceived">0</span></div>
+                <div>Current Version: <span id="currentVersion">0</span></div>
+            </div>
+        </div>
+
+        <div class="editor-container">
+            <div class="editor-wrapper">
+                <textarea id="editor" class="editor" disabled placeholder="Connect to start editing with queue-based conflict resolution..."></textarea>
+            </div>
+        </div>
+    </div>
+
+    <div class="status-bar" id="statusBar">Status: Disconnected</div>
+
+    <!-- Connection Modal -->
+    <div class="connection-modal" id="connectionModal">
+        <div class="modal-content">
+            <h2>Connect to Document</h2>
+            <div class="form-group">
+                <label>Document ID (leave empty for new document)</label>
+                <input type="text" id="connectDocId" placeholder="">
+            </div>
+            <div class="form-group">
+                <label>Your Username</label>
+                <input type="text" id="connectUsername" placeholder="Enter your name" value="Alice">
+            </div>
+            <button class="connect-btn" onclick="connect()">Connect with Queue System</button>
+        </div>
+    </div>
+
+    <script>
+        const SERVER_URL = 'http://localhost:3000';
+        let socket;
+        let currentDocumentId = null;
+        let currentUserId = null;
+        let currentUsername = 'Alice';
+        let currentVersion = 0;
+        let currentContent = '';
+        let isProcessingOperation = false;
+        let operationCounter = 0;
+
+        let stats = {
+            opsSent: 0,
+            opsReceived: 0
+        };
+
+        function connect() {
+            const docId = document.getElementById('connectDocId').value || null;
+            const username = document.getElementById('connectUsername').value || 'Anonymous';
+
+            currentUsername = username;
+            currentUserId = 'user-' + username.toLowerCase() + '-' + Date.now();
+
+            socket = io(SERVER_URL);
+
+            socket.on('connect', () => {
+                console.log('✅ Connected as', socket.id);
+                document.getElementById('userBadge').textContent = username;
+                document.getElementById('connectionModal').style.display = 'none';
+                updateStatus('Connected with Queue System', 'success');
+
+                if (docId) {
+                    socket.emit('join-document', {
+                        documentId: docId,
+                        userId: currentUserId,
+                        username: currentUsername
+                    });
+                } else {
+                    createNewDocument();
+                }
+            });
+
+            socket.on('document-state', (data) => {
+                console.log('📚 Document state received:', data);
+                currentDocumentId = data.id;
+                currentContent = data.content || '';
+                currentVersion = data.version || 0;
+
+                const editor = document.getElementById('editor');
+                editor.value = currentContent;
+                editor.disabled = false;
+                document.getElementById('versionBadge').textContent = 'v' + data.version;
+                document.getElementById('currentVersion').textContent = data.version;
+            });
+
+            socket.on('operation', (data) => {
+                console.log('📥 Operation received:', data);
+                stats.opsReceived++;
+                updateStats();
+
+                addQueueOperation(data.operationId, data.userId, data.operation?.type, 'completed');
+
+                // ✅ Use server's authoritative content for all operations
+                if (data.content !== undefined) {
+                    console.log('✅ Syncing to server content from', data.userId);
+                    currentContent = data.content;
+                    currentVersion = data.serverVersion || data.version;
+
+                    const editor = document.getElementById('editor');
+                    editor.value = currentContent;
+                    document.getElementById('versionBadge').textContent = 'v' + currentVersion;
+                    document.getElementById('currentVersion').textContent = currentVersion;
+                }
+            });
+
+            socket.on('operation-acknowledged', (data) => {
+                console.log('✅ Operation acknowledged:', data);
+                updateQueueOperation(data.operationId, 'completed');
+
+                // ✅ Use server's authoritative content instead of applying locally
+                if (data.content !== undefined) {
+                    console.log('✅ Syncing to server content:', data.content);
+                    currentContent = data.content;
+                    currentVersion = data.serverVersion || data.version;
+
+                    const editor = document.getElementById('editor');
+                    editor.value = currentContent;
+                    document.getElementById('versionBadge').textContent = 'v' + currentVersion;
+                    document.getElementById('currentVersion').textContent = currentVersion;
+                }
+            });
+
+            socket.on('operation-rejected', (data) => {
+                console.error('❌ Operation rejected:', data);
+                updateQueueOperation(data.operationId, 'failed');
+                showNotification('Operation rejected: ' + data.reason, 'error');
+            });
+
+            socket.on('user-joined', (data) => {
+                console.log('👋 User joined:', data);
+                showNotification(`${data.user?.username || 'User'} joined`);
+            });
+
+            socket.on('error', (data) => {
+                console.error('❌ Error:', data);
+                showNotification('Error: ' + data.message, 'error');
+            });
+
+            const editor = document.getElementById('editor');
+            editor.addEventListener('input', handleInput);
+        }
+
+        function createNewDocument() {
+            fetch('http://localhost:3000/api/documents', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ title: 'Queue-Based Collaborative Document' })
+            })
+            .then(response => response.json())
+            .then(data => {
+                console.log('📝 Document created:', data);
+                socket.emit('join-document', {
+                    documentId: data._id,
+                    userId: currentUserId,
+                    username: currentUsername
+                });
+            })
+            .catch(error => {
+                console.error('❌ Error creating document:', error);
+                showNotification('Failed to create document', 'error');
+            });
+        }
+
+        /**
+         * PROPER DIFF ALGORITHM - Detect exact changes between strings
+         */
+        function detectOperation(oldText, newText, cursorPosition) {
+            if (oldText === newText) return null;
+
+            if (newText.length > oldText.length) {
+                // INSERT operation
+                return detectInsertOperation(oldText, newText);
+            } else if (newText.length < oldText.length) {
+                // DELETE operation
+                return detectDeleteOperation(oldText, newText, cursorPosition);
+            } else {
+                // REPLACE operation (delete + insert at same position)
+                return detectReplaceOperation(oldText, newText, cursorPosition);
+            }
+        }
+
+        function detectInsertOperation(oldText, newText) {
+            // Find the first position where they differ
+            let start = 0;
+            while (start < oldText.length && start < newText.length && oldText[start] === newText[start]) {
+                start++;
+            }
+
+            // Find the last position where they differ
+            let oldEnd = oldText.length - 1;
+            let newEnd = newText.length - 1;
+
+            while (oldEnd >= start && newEnd >= start && oldText[oldEnd] === newText[newEnd]) {
+                oldEnd--;
+                newEnd--;
+            }
+
+            // The inserted content is from start to newEnd in newText
+            const insertedContent = newText.substring(start, newEnd + 1);
+
+            return {
+                type: 'insert',
+                position: start,
+                content: insertedContent,
+                length: insertedContent.length
+            };
+        }
+
+        function detectDeleteOperation(oldText, newText, cursorPosition) {
+            // Find the first position where they differ
+            let start = 0;
+            while (start < oldText.length && start < newText.length && oldText[start] === newText[start]) {
+                start++;
+            }
+
+            // Find the last position where they differ
+            let oldEnd = oldText.length - 1;
+            let newEnd = newText.length - 1;
+
+            while (oldEnd >= start && newEnd >= start && oldText[oldEnd] === newText[newEnd]) {
+                oldEnd--;
+                newEnd--;
+            }
+
+            // The deleted content is from start to oldEnd in oldText
+            const deletedLength = (oldEnd - start) + 1;
+
+            return {
+                type: 'delete',
+                position: start,
+                length: deletedLength,
+                content: oldText.substring(start, oldEnd + 1) // Store deleted content for undo
+            };
+        }
+
+        function detectReplaceOperation(oldText, newText, cursorPosition) {
+            // Find the first position where they differ
+            let start = 0;
+            while (start < oldText.length && start < newText.length && oldText[start] === newText[start]) {
+                start++;
+            }
+
+            // Find the last position where they differ
+            let oldEnd = oldText.length - 1;
+            let newEnd = newText.length - 1;
+
+            while (oldEnd >= start && newEnd >= start && oldText[oldEnd] === newText[newEnd]) {
+                oldEnd--;
+                newEnd--;
+            }
+
+            const deletedLength = (oldEnd - start) + 1;
+            const insertedContent = newText.substring(start, newEnd + 1);
+
+            // For replace, we'll return delete + insert as two operations
+            // But for simplicity, let's treat it as insert (the new content)
+            return {
+                type: 'insert',
+                position: start,
+                content: insertedContent,
+                length: insertedContent.length,
+                deletedContent: oldText.substring(start, oldEnd + 1),
+                deletedLength: deletedLength
+            };
+        }
+
+        function handleInput() {
+            if (isProcessingOperation) return;
+
+            const editor = document.getElementById('editor');
+            const newValue = editor.value;
+            const cursorPosition = editor.selectionStart || 0;
+
+            // Use the proper diff algorithm
+            const detectedOp = detectOperation(currentContent, newValue, cursorPosition);
+
+            if (detectedOp) {
+                const operationId = `local-op-${operationCounter++}`;
+
+                const operation = {
+                    ...detectedOp,
+                    userId: currentUserId,
+                    version: currentVersion,
+                    timestamp: Date.now(),
+                    id: operationId
+                };
+
+                console.log('📤 Detected operation:', operationId, operation);
+                addQueueOperation(operationId, currentUserId, operation.type, 'processing');
+
+                socket.emit('operation', {
+                    documentId: currentDocumentId,
+                    operation: operation,
+                    clientVersion: currentVersion
+                });
+
+                stats.opsSent++;
+                updateStats();
+            }
+
+            currentContent = newValue;
+        }
+
+        function applyOperation(operation) {
+            isProcessingOperation = true;
+
+            if (operation.type === 'insert') {
+                const before = currentContent.substring(0, operation.position);
+                const after = currentContent.substring(operation.position);
+                currentContent = before + operation.content + after;
+                currentVersion = operation.version;
+            } else if (operation.type === 'delete') {
+                const before = currentContent.substring(0, operation.position);
+                const after = currentContent.substring(operation.position + operation.length);
+                currentContent = before + after;
+                currentVersion = operation.version;
+            }
+
+            const editor = document.getElementById('editor');
+            const currentCursorPosition = editor.selectionStart;
+
+            editor.value = currentContent;
+            document.getElementById('versionBadge').textContent = 'v' + currentVersion;
+            document.getElementById('currentVersion').textContent = currentVersion;
+
+            editor.setSelectionRange(currentCursorPosition, currentCursorPosition);
+
+            setTimeout(() => {
+                isProcessingOperation = false;
+            }, 50);
+        }
+
+        function addQueueOperation(operationId, userId, type, status) {
+            const queue = document.getElementById('operationQueue');
+            if (queue.children[0]?.style?.color === 'rgb(123, 140, 140)') {
+                queue.innerHTML = '';
+            }
+
+            const item = document.createElement('div');
+            item.className = `queue-item ${status}`;
+            item.id = `op-${operationId}`;
+            item.innerHTML = `
+                <div style="font-weight: bold; color: #2c3e50;">${operationId}</div>
+                <div>User: ${userId} | Type: ${type} | Status: ${status}</div>
+            `;
+            queue.insertBefore(item, queue.firstChild);
+        }
+
+        function updateQueueOperation(operationId, status) {
+            const item = document.getElementById(`op-${operationId}`);
+            if (item) {
+                item.className = `queue-item ${status}`;
+                item.innerHTML = item.innerHTML.replace(/Status: \w+/, `Status: ${status}`);
+            }
+        }
+
+        function updateStats() {
+            document.getElementById('opsSent').textContent = stats.opsSent;
+            document.getElementById('opsReceived').textContent = stats.opsReceived;
+        }
+
+        function updateStatus(message, type = 'info') {
+            const status = document.getElementById('statusBar');
+            status.textContent = `Status: ${message}`;
+        }
+
+        function showNotification(message, type = 'info') {
+            console.log(message);
+        }
+    </script>
+</body>
+</html>
