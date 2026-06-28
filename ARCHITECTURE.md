@@ -1,4 +1,4 @@
-# 🏗️ Architecture Diagram - Collaborative Sync Engine
+#  Architecture Diagram - Collaborative Sync Engine
 
 ## Complete System Architecture
 
@@ -94,56 +94,6 @@ graph TB
     class ExpressAPI,DocumentRoutes apiStyle
 ```
 
-## Operation Flow Detail
-
-```mermaid
-sequenceDiagram
-    participant User1 as 👤 User 1
-    participant Client1 as 🌐 Client 1
-    participant Socket as 🔌 Socket.io
-    participant Queue as 📋 Queue Service
-    participant OT as 🔄 OT Transformer
-    participant State as 📄 Document State
-    participant DB as 💾 MongoDB
-    participant User2 as 👤 User 2
-    participant Client2 as 🌐 Client 2
-
-    %% User 1 makes an edit
-    User1->>Client1: Type "Hello"
-    Client1->>Client1: Detect operation (insert)
-    Client1->>Socket: Emit operation<br/>(version: 5)
-    
-    %% Server processing
-    Socket->>Queue: Queue operation<br/>(clientVersion: 5)
-    Queue->>Queue: Check for concurrent ops
-    
-    Note over Queue: Found concurrent ops:<br/>Op6 (User2, v6)<br/>Op7 (User2, v7)
-    
-    Queue->>OT: Transform against concurrent ops
-    OT->>OT: Transform positions
-    OT->>Queue: Return transformed op
-    
-    Queue->>State: Apply operation
-    State->>State: Update content & version (v8)
-    
-    %% Non-blocking persistence
-    State->>DB: Async save (don't wait)
-    
-    %% Broadcast to all clients
-    State->>Socket: Broadcast operation + content
-    
-    %% Acknowledge sender
-    Socket->>Client1: operation-acknowledged<br/>(version: 8, content)
-    
-    %% Sync receiver
-    Socket->>Client2: operation event<br/>(version: 8, content)
-    
-    %% Both clients sync to server state
-    Client1->>Client1: Update editor with server content
-    Client2->>Client2: Update editor with server content
-    
-    Note over Client1,Client2: Both clients now<br/>synced to version 8
-```
 
 ## OT Transformation Logic
 
@@ -323,7 +273,7 @@ mindmap
 ---
 
 **Architecture designed for:**
-- ⚡ **Performance** - Non-blocking operations, queue processing
-- 🔄 **Consistency** - Server-authoritative state management  
-- 👥 **Collaboration** - Multi-user real-time editing
-- 🛡️ **Reliability** - Proper OT conflict resolution
+-  **Performance** - Non-blocking operations, queue processing
+-  **Consistency** - Server-authoritative state management  
+-  **Collaboration** - Multi-user real-time editing
+-  **Reliability** - Proper OT conflict resolution
