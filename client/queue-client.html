@@ -187,8 +187,9 @@
             });
 
             socket.on('error', (data) => {
-                console.error('❌ Error:', data);
-                showNotification('Error: ' + data.message, 'error');
+                console.error('❌ Socket Error received:', data);
+                const errorMessage = typeof data === 'string' ? data : (data?.message || JSON.stringify(data));
+                showNotification('Socket Error: ' + errorMessage, 'error');
             });
 
             const editor = document.getElementById('editor');
@@ -196,14 +197,28 @@
         }
 
         function createNewDocument() {
+            console.log('🚀 Creating document at:', `${SERVER_URL}/api/documents`);
+
             fetch(`${SERVER_URL}/api/documents`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ title: 'Queue-Based Collaborative Document' })
             })
-            .then(response => response.json())
+            .then(response => {
+                console.log('📡 API Response status:', response.status);
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                return response.json();
+            })
             .then(data => {
-                console.log('📝 Document created:', data);
+                console.log('📝 Document created successfully:', data);
+                showNotification('Document created successfully!', 'success');
+
+                if (!data._id) {
+                    throw new Error('No document ID in response');
+                }
+
                 socket.emit('join-document', {
                     documentId: data._id,
                     userId: currentUserId,
@@ -212,7 +227,7 @@
             })
             .catch(error => {
                 console.error('❌ Error creating document:', error);
-                showNotification('Failed to create document', 'error');
+                showNotification(`Failed to create document: ${error.message}`, 'error');
             });
         }
 
