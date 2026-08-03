@@ -26,10 +26,16 @@ const io = new SocketIOServer(httpServer, {
 app.use(cors());
 app.use(express.json());
 // Serve static files from client folder
-app.use(express.static(path.join(process.cwd(), 'client')));
+const clientPath = path.join(__dirname, '..', 'client');
+console.log('Serving client files from:', clientPath);
+app.use(express.static(clientPath));
 app.use('/api', router);
 
-// Basic route
+// Basic routes
+app.get('/', (req, res) => {
+  res.redirect('/client/queue-client.html');
+});
+
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', message: 'Server is running' });
 });
