@@ -25,15 +25,47 @@ const io = new SocketIOServer(httpServer, {
 // Middleware
 app.use(cors());
 app.use(express.json());
+
 // Serve static files from client folder
-const clientPath = path.join(__dirname, '..', 'client');
-console.log('Serving client files from:', clientPath);
+import fs from 'fs';
+
+const possibleClientPaths = [
+  path.join(process.cwd(), 'client'),
+  path.join(__dirname, '..', '..', 'client'),
+  '/opt/render/project/src/client',
+  '/opt/render/project/client'
+];
+
+let clientPath = possibleClientPaths.find(p => {
+  try {
+    return fs.existsSync(p) && fs.readdirSync(p).includes('queue-client.html');
+  } catch {
+    return false;
+  }
+});
+
+if (!clientPath) {
+  console.error('ERROR: Client folder not found!');
+  console.error('Searched paths:', possibleClientPaths);
+  console.error('Current cwd:', process.cwd());
+  clientPath = path.join(process.cwd(), 'client'); // fallback
+} else {
+  console.log('✅ Serving client files from:', clientPath);
+  const files = fs.readdirSync(clientPath);
+  console.log('Client files available:', files);
+}
+
 app.use(express.static(clientPath));
 app.use('/api', router);
 
 // Basic routes
 app.get('/', (req, res) => {
-  res.redirect('/client/queue-client.html');
+  res.redirect('/queue-client.html');
+});
+
+// Explicit route for /client/ URLs
+app.get('/client/queue-client.html', (req, res) => {
+  res.sendFile(path.join(clientPath, 'queue-client.html'));
 });
 
 app.get('/health', (req, res) => {
