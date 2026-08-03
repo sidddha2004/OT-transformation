@@ -110,17 +110,20 @@
 
             socket.on('connect', () => {
                 console.log('✅ Connected as', socket.id);
+                console.log('📋 Connection details - docId:', docId, 'username:', username);
                 document.getElementById('userBadge').textContent = username;
                 document.getElementById('connectionModal').style.display = 'none';
                 updateStatus('Connected with Queue System', 'success');
 
                 if (docId) {
+                    console.log('🔗 Joining existing document:', docId);
                     socket.emit('join-document', {
                         documentId: docId,
                         userId: currentUserId,
                         username: currentUsername
                     });
                 } else {
+                    console.log('🆕 Creating new document...');
                     createNewDocument();
                 }
             });
