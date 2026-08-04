@@ -100,6 +100,9 @@
             opsReceived: 0
         };
 
+        // Track pending operations to prevent stale overwrites
+        let pendingOperations = new Map(); // operationId -> { operation, timestamp, clientVersion }
+
         function connect() {
             const docId = document.getElementById('connectDocId').value || null;
             const username = document.getElementById('connectUsername').value || 'Anonymous';
@@ -135,6 +138,10 @@
                 currentContent = data.content || '';
                 currentVersion = data.version || 0;
 
+                // Clear any pending operations from previous session
+                pendingOperations.clear();
+                console.log('   Cleared pending operations for new document');
+
                 const editor = document.getElementById('editor');
                 editor.value = currentContent;
                 editor.disabled = false;
@@ -161,30 +168,41 @@
 
                 // ✅ Use server's authoritative content for all operations
                 if (data.content !== undefined) {
-                    console.log('✅ Syncing to server content from', data.userId);
+                    const serverVersion = data.serverVersion || data.version;
+                    console.log('✅ Server response from', data.userId);
+                    console.log('   Server version:', serverVersion);
+                    console.log('   Current client version:', currentVersion);
                     console.log('   Server content:', JSON.stringify(data.content.substring(0, 50)));
                     console.log('   Editor content:', JSON.stringify(document.getElementById('editor').value.substring(0, 50)));
 
-                    currentContent = data.content;
-                    currentVersion = data.serverVersion || data.version;
+                    // CRITICAL FIX: Only apply if server version is NEWER than our current version
+                    // This prevents stale responses from overwriting newer local state
+                    if (serverVersion > currentVersion) {
+                        console.log('✅ Server version is newer, applying update');
+                        currentContent = data.content;
+                        currentVersion = serverVersion;
 
-                    const editor = document.getElementById('editor');
-                    // Only update editor if server content differs
-                    if (editor.value !== currentContent) {
-                        console.log('📝 Updating editor to match server content');
-                        // Save cursor position
-                        const cursorPosition = editor.selectionStart;
-                        editor.value = currentContent;
-                        // Restore cursor position if valid
-                        if (cursorPosition <= currentContent.length) {
-                            editor.setSelectionRange(cursorPosition, cursorPosition);
+                        const editor = document.getElementById('editor');
+                        // Only update editor if server content differs
+                        if (editor.value !== currentContent) {
+                            console.log('📝 Updating editor to match server content');
+                            // Save cursor position
+                            const cursorPosition = editor.selectionStart;
+                            editor.value = currentContent;
+                            // Restore cursor position if valid
+                            if (cursorPosition <= currentContent.length) {
+                                editor.setSelectionRange(cursorPosition, cursorPosition);
+                            }
+                        } else {
+                            console.log('✅ Editor already matches server content');
                         }
-                    } else {
-                        console.log('✅ Editor already matches server content');
-                    }
 
-                    document.getElementById('versionBadge').textContent = 'v' + currentVersion;
-                    document.getElementById('currentVersion').textContent = currentVersion;
+                        document.getElementById('versionBadge').textContent = 'v' + currentVersion;
+                        document.getElementById('currentVersion').textContent = currentVersion;
+                    } else {
+                        console.log('⚠️ Server version is not newer, ignoring stale response');
+                        console.log('   This prevents overwriting local changes with old server data');
+                    }
                 }
             });
 
@@ -192,29 +210,46 @@
                 console.log('✅ Operation acknowledged:', data);
                 updateQueueOperation(data.operationId, 'completed');
 
+                // Remove from pending operations
+                const pendingOp = pendingOperations.get(data.operationId);
+                if (pendingOp) {
+                    console.log('   Removing from pending operations');
+                    pendingOperations.delete(data.operationId);
+                }
+
                 // ✅ Use server's authoritative content instead of applying locally
                 if (data.content !== undefined) {
-                    console.log('✅ Syncing to server content (acknowledged):', data.content);
-                    console.log('   Previous currentContent:', JSON.stringify(currentContent.substring(0, 50)));
+                    const serverVersion = data.serverVersion || data.version;
+                    console.log('✅ Server ACK received for operation:', data.operationId);
+                    console.log('   Server version:', serverVersion);
+                    console.log('   Current client version:', currentVersion);
+                    console.log('   Pending operations remaining:', pendingOperations.size);
 
-                    currentContent = data.content;
-                    currentVersion = data.serverVersion || data.version;
+                    // CRITICAL FIX: Only apply if server version is NEWER than our current version
+                    if (serverVersion > currentVersion) {
+                        console.log('✅ Server version is newer, applying ACK update');
+                        currentContent = data.content;
+                        currentVersion = serverVersion;
 
-                    const editor = document.getElementById('editor');
-                    // Only update editor if server content differs
-                    if (editor.value !== currentContent) {
-                        console.log('📝 Updating editor to match server content');
-                        const cursorPosition = editor.selectionStart;
-                        editor.value = currentContent;
-                        if (cursorPosition <= currentContent.length) {
-                            editor.setSelectionRange(cursorPosition, cursorPosition);
+                        const editor = document.getElementById('editor');
+                        // Only update editor if server content differs
+                        if (editor.value !== currentContent) {
+                            console.log('📝 Updating editor to match server content (ACK)');
+                            const cursorPosition = editor.selectionStart;
+                            editor.value = currentContent;
+                            if (cursorPosition <= currentContent.length) {
+                                editor.setSelectionRange(cursorPosition, cursorPosition);
+                            }
+                        } else {
+                            console.log('✅ Editor already matches server content');
                         }
-                    } else {
-                        console.log('✅ Editor already matches server content');
-                    }
 
-                    document.getElementById('versionBadge').textContent = 'v' + currentVersion;
-                    document.getElementById('currentVersion').textContent = currentVersion;
+                        document.getElementById('versionBadge').textContent = 'v' + currentVersion;
+                        document.getElementById('currentVersion').textContent = currentVersion;
+                    } else {
+                        console.log('⚠️ Server ACK version is not newer, ignoring');
+                        console.log('   This prevents race conditions from fast typing');
+                    }
                 }
             });
 
@@ -406,6 +441,14 @@
                 console.log('   Based on currentContent:', JSON.stringify(currentContent.substring(0, 50)));
                 console.log('   Target newValue:', JSON.stringify(newValue.substring(0, 50)));
 
+                // Track this pending operation
+                pendingOperations.set(operationId, {
+                    operation: operation,
+                    timestamp: Date.now(),
+                    clientVersion: currentVersion,
+                    expectedContent: newValue
+                });
+
                 addQueueOperation(operationId, currentUserId, operation.type, 'processing');
 
                 socket.emit('operation', {
@@ -417,10 +460,10 @@
                 stats.opsSent++;
                 updateStats();
 
-                // Update currentContent to what we sent - this is our local expectation
-                // When server responds, we'll sync to actual authoritative content
-                currentContent = newValue;
-                console.log('✅ Updated currentContent to sent value:', JSON.stringify(currentContent));
+                // CRITICAL: Don't update currentContent immediately
+                // Keep it as server state until ACK arrives
+                console.log('✅ Operation sent, keeping currentContent as server state until ACK');
+                console.log('   Pending operations:', pendingOperations.size);
             } else {
                 // No operation detected (content is same)
                 currentContent = newValue;
@@ -495,6 +538,22 @@
         function showNotification(message, type = 'info') {
             console.log(message);
         }
+
+        // Cleanup stale pending operations (older than 10 seconds)
+        setInterval(() => {
+            const now = Date.now();
+            let cleaned = 0;
+            for (const [opId, opData] of pendingOperations.entries()) {
+                if (now - opData.timestamp > 10000) { // 10 seconds
+                    console.log('🧹 Cleaning up stale pending operation:', opId);
+                    pendingOperations.delete(opId);
+                    cleaned++;
+                }
+            }
+            if (cleaned > 0) {
+                console.log(`🧹 Cleaned up ${cleaned} stale pending operations`);
+            }
+        }, 5000); // Check every 5 seconds
     </script>
 </body>
 </html>
