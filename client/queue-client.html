@@ -135,17 +135,24 @@
                 currentContent = data.content || '';
                 currentVersion = data.version || 0;
 
+                // Initialize expected content to match server content
+                clearExpectedContent();
+
                 const editor = document.getElementById('editor');
                 editor.value = currentContent;
                 editor.disabled = false;
                 document.getElementById('versionBadge').textContent = 'v' + data.version;
                 document.getElementById('currentVersion').textContent = data.version;
 
-                // Show document ID in header
+                // Show document ID in header - display full ID clearly
                 const docIdBadge = document.getElementById('documentIdBadge');
                 docIdBadge.style.display = 'block';
-                docIdBadge.textContent = '📄 ' + (data.id ? data.id.substring(0, 8) + '...' : 'Unknown');
-                docIdBadge.title = 'Document ID: ' + data.id; // Full ID on hover
+                if (data.id) {
+                    // Show full ID without truncation - user can see it properly
+                    docIdBadge.textContent = '📄 ' + data.id;
+                } else {
+                    docIdBadge.textContent = '📄 Unknown';
+                }
             });
 
             socket.on('operation', (data) => {
@@ -158,11 +165,19 @@
                 // ✅ Use server's authoritative content for all operations
                 if (data.content !== undefined) {
                     console.log('✅ Syncing to server content from', data.userId);
+                    console.log('   Server content:', JSON.stringify(data.content.substring(0, 50)));
+                    console.log('   Previous currentContent:', JSON.stringify(currentContent.substring(0, 50)));
+
                     currentContent = data.content;
                     currentVersion = data.serverVersion || data.version;
+                    clearExpectedContent(); // Clear expected content now that we have actual server content
 
                     const editor = document.getElementById('editor');
-                    editor.value = currentContent;
+                    // Only update editor if it's different from server content
+                    if (editor.value !== currentContent) {
+                        editor.value = currentContent;
+                        console.log('📝 Updated editor with server content');
+                    }
                     document.getElementById('versionBadge').textContent = 'v' + currentVersion;
                     document.getElementById('currentVersion').textContent = currentVersion;
                 }
@@ -175,11 +190,18 @@
                 // ✅ Use server's authoritative content instead of applying locally
                 if (data.content !== undefined) {
                     console.log('✅ Syncing to server content:', data.content);
+                    console.log('   Previous currentContent:', JSON.stringify(currentContent.substring(0, 50)));
+
                     currentContent = data.content;
                     currentVersion = data.serverVersion || data.version;
+                    clearExpectedContent(); // Clear expected content now that we have actual server content
 
                     const editor = document.getElementById('editor');
-                    editor.value = currentContent;
+                    // Only update editor if it's different from server content
+                    if (editor.value !== currentContent) {
+                        editor.value = currentContent;
+                        console.log('📝 Updated editor with server content');
+                    }
                     document.getElementById('versionBadge').textContent = 'v' + currentVersion;
                     document.getElementById('currentVersion').textContent = currentVersion;
                 }
@@ -351,6 +373,17 @@
             const newValue = editor.value;
             const cursorPosition = editor.selectionStart || 0;
 
+            // Check if editor content matches currentContent
+            // If not, we're waiting for server response, so skip this input event
+            if (newValue !== currentContent && newValue !== getExpectedContent()) {
+                console.log('⏳ Editor content differs from server state, waiting for sync...');
+                console.log('   Editor:', JSON.stringify(newValue));
+                console.log('   Server currentContent:', JSON.stringify(currentContent));
+                // Temporarily revert editor to server state to prevent drift
+                editor.value = currentContent;
+                return;
+            }
+
             // Use the proper diff algorithm
             const detectedOp = detectOperation(currentContent, newValue, cursorPosition);
 
@@ -366,6 +399,9 @@
                 };
 
                 console.log('📤 Detected operation:', operationId, operation);
+                console.log('   Based on currentContent:', JSON.stringify(currentContent.substring(0, 50)));
+                console.log('   Target newValue:', JSON.stringify(newValue.substring(0, 50)));
+
                 addQueueOperation(operationId, currentUserId, operation.type, 'processing');
 
                 socket.emit('operation', {
@@ -376,9 +412,28 @@
 
                 stats.opsSent++;
                 updateStats();
-            }
 
-            currentContent = newValue;
+                // Update currentContent to what we expect the server to confirm
+                // This prevents duplicate operations while waiting for server response
+                updateExpectedContent(newValue);
+            } else {
+                // No operation detected, just update currentContent
+                currentContent = newValue;
+            }
+        }
+
+        let expectedServerContent = null;
+
+        function getExpectedContent() {
+            return expectedServerContent;
+        }
+
+        function updateExpectedContent(content) {
+            expectedServerContent = content;
+        }
+
+        function clearExpectedContent() {
+            expectedServerContent = null;
         }
 
         function applyOperation(operation) {
