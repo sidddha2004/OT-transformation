@@ -135,9 +135,6 @@
                 currentContent = data.content || '';
                 currentVersion = data.version || 0;
 
-                // Initialize expected content to match server content
-                clearExpectedContent();
-
                 const editor = document.getElementById('editor');
                 editor.value = currentContent;
                 editor.disabled = false;
@@ -166,18 +163,26 @@
                 if (data.content !== undefined) {
                     console.log('✅ Syncing to server content from', data.userId);
                     console.log('   Server content:', JSON.stringify(data.content.substring(0, 50)));
-                    console.log('   Previous currentContent:', JSON.stringify(currentContent.substring(0, 50)));
+                    console.log('   Editor content:', JSON.stringify(document.getElementById('editor').value.substring(0, 50)));
 
                     currentContent = data.content;
                     currentVersion = data.serverVersion || data.version;
-                    clearExpectedContent(); // Clear expected content now that we have actual server content
 
                     const editor = document.getElementById('editor');
-                    // Only update editor if it's different from server content
+                    // Only update editor if server content differs
                     if (editor.value !== currentContent) {
+                        console.log('📝 Updating editor to match server content');
+                        // Save cursor position
+                        const cursorPosition = editor.selectionStart;
                         editor.value = currentContent;
-                        console.log('📝 Updated editor with server content');
+                        // Restore cursor position if valid
+                        if (cursorPosition <= currentContent.length) {
+                            editor.setSelectionRange(cursorPosition, cursorPosition);
+                        }
+                    } else {
+                        console.log('✅ Editor already matches server content');
                     }
+
                     document.getElementById('versionBadge').textContent = 'v' + currentVersion;
                     document.getElementById('currentVersion').textContent = currentVersion;
                 }
@@ -189,19 +194,25 @@
 
                 // ✅ Use server's authoritative content instead of applying locally
                 if (data.content !== undefined) {
-                    console.log('✅ Syncing to server content:', data.content);
+                    console.log('✅ Syncing to server content (acknowledged):', data.content);
                     console.log('   Previous currentContent:', JSON.stringify(currentContent.substring(0, 50)));
 
                     currentContent = data.content;
                     currentVersion = data.serverVersion || data.version;
-                    clearExpectedContent(); // Clear expected content now that we have actual server content
 
                     const editor = document.getElementById('editor');
-                    // Only update editor if it's different from server content
+                    // Only update editor if server content differs
                     if (editor.value !== currentContent) {
+                        console.log('📝 Updating editor to match server content');
+                        const cursorPosition = editor.selectionStart;
                         editor.value = currentContent;
-                        console.log('📝 Updated editor with server content');
+                        if (cursorPosition <= currentContent.length) {
+                            editor.setSelectionRange(cursorPosition, cursorPosition);
+                        }
+                    } else {
+                        console.log('✅ Editor already matches server content');
                     }
+
                     document.getElementById('versionBadge').textContent = 'v' + currentVersion;
                     document.getElementById('currentVersion').textContent = currentVersion;
                 }
@@ -373,18 +384,11 @@
             const newValue = editor.value;
             const cursorPosition = editor.selectionStart || 0;
 
-            // Check if editor content matches currentContent
-            // If not, we're waiting for server response, so skip this input event
-            if (newValue !== currentContent && newValue !== getExpectedContent()) {
-                console.log('⏳ Editor content differs from server state, waiting for sync...');
-                console.log('   Editor:', JSON.stringify(newValue));
-                console.log('   Server currentContent:', JSON.stringify(currentContent));
-                // Temporarily revert editor to server state to prevent drift
-                editor.value = currentContent;
-                return;
-            }
+            console.log('🔍 handleInput called');
+            console.log('   Editor content:', JSON.stringify(newValue));
+            console.log('   currentContent:', JSON.stringify(currentContent));
 
-            // Use the proper diff algorithm
+            // Use the proper diff algorithm based on currentContent (server state)
             const detectedOp = detectOperation(currentContent, newValue, cursorPosition);
 
             if (detectedOp) {
@@ -413,28 +417,17 @@
                 stats.opsSent++;
                 updateStats();
 
-                // Update currentContent to what we expect the server to confirm
-                // This prevents duplicate operations while waiting for server response
-                updateExpectedContent(newValue);
-            } else {
-                // No operation detected, just update currentContent
+                // Update currentContent to what we sent - this is our local expectation
+                // When server responds, we'll sync to actual authoritative content
                 currentContent = newValue;
+                console.log('✅ Updated currentContent to sent value:', JSON.stringify(currentContent));
+            } else {
+                // No operation detected (content is same)
+                currentContent = newValue;
+                console.log('ℹ️ No operation detected, content unchanged');
             }
         }
 
-        let expectedServerContent = null;
-
-        function getExpectedContent() {
-            return expectedServerContent;
-        }
-
-        function updateExpectedContent(content) {
-            expectedServerContent = content;
-        }
-
-        function clearExpectedContent() {
-            expectedServerContent = null;
-        }
 
         function applyOperation(operation) {
             isProcessingOperation = true;
