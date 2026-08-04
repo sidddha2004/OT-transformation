@@ -33,6 +33,7 @@
         <div class="user-info">
             <div class="user-badge" id="userBadge">Not Connected</div>
             <div class="user-badge" id="versionBadge">v0</div>
+            <div class="user-badge" id="documentIdBadge" style="display:none;">📄 Doc: --</div>
         </div>
     </div>
 
@@ -139,6 +140,12 @@
                 editor.disabled = false;
                 document.getElementById('versionBadge').textContent = 'v' + data.version;
                 document.getElementById('currentVersion').textContent = data.version;
+
+                // Show document ID in header
+                const docIdBadge = document.getElementById('documentIdBadge');
+                docIdBadge.style.display = 'block';
+                docIdBadge.textContent = '📄 ' + (data.id ? data.id.substring(0, 8) + '...' : 'Unknown');
+                docIdBadge.title = 'Document ID: ' + data.id; // Full ID on hover
             });
 
             socket.on('operation', (data) => {
